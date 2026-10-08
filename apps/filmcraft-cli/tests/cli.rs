@@ -19,6 +19,11 @@ fn help_and_usage_errors() {
     let h = cli(&["help"]);
     assert!(h.status.success());
     assert!(String::from_utf8_lossy(&h.stdout).contains("exec <id>"));
+    // `--help` / `-h` print the help like `help`, also after other arguments (T2: "missing subcommand")
+    for args in [&["--help"][..], &["-h"], &["exec", "--help"], &["--demo", "-h"]] {
+        let o = cli(args);
+        assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).contains("exec <id>"), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    }
     assert_eq!(cli(&[]).status.code(), Some(2));
     assert_eq!(cli(&["frobnicate"]).status.code(), Some(2));
     assert_eq!(cli(&["exec", "file.newBin", "notkv"]).status.code(), Some(2));
