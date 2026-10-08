@@ -1532,7 +1532,7 @@ fn build() -> Vec<CommandSpec> {
             "Apply Audio Transition",
             ["Sequence"],
             Some("Cmd+Shift+D"),
-            r#"{"clip":id?,"effect":str?,"frames":i64?}"#,
+            r#"{"clip":id?,"effect":"constant_power|Constant Power|…"?,"frames":i64?,"edge":"in"|"out"?,"params":{param:value}?,"reverse":bool?}"#,
             has_seq,
             |s, p| apply_transition(s, p, TrackKind::Audio)
         ),
@@ -3245,7 +3245,12 @@ pub fn preview_transition(s: &Session, p: &Value, kind: TrackKind) -> Result<(Tr
     };
     let t = s.playhead();
     let clip = clip_p(p, "clip");
-    let edge = str_p(p, "edge").map(str::to_string);
+    // `edge` picks the clip edge; without it the playhead does (the menu command's behaviour)
+    let edge = match p.get("edge") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(e)) if e == "in" || e == "out" => Some(e.clone()),
+        Some(e) => return Err(bad("transition", format!("`edge` must be \"in\" or \"out\", got {e}"))),
+    };
     let targeted = s.targeting().targeted;
     let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
     // Find (track, from, to, cut) at the playhead (nearest edit on targeted tracks) or at a clip edge.
