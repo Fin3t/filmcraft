@@ -244,7 +244,7 @@ impl FilmcraftMcp {
                 tokio::task::spawn_blocking(move || {
                     // A command that panicked earlier poisoned the lock; the session is still usable.
                     let mut g = s.lock().unwrap_or_else(PoisonError::into_inner);
-                    g.execute(&id, params).map_err(AutomationError::from)
+                    g.execute_checked(&id, params).map_err(AutomationError::from)
                 })
                 .await
                 .map_err(join_error)?

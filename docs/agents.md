@@ -166,6 +166,9 @@ Notes:
 
 Every command is also one shell call away. Options go anywhere; output is JSON; exit status is 0 on
 success, 1 when a command fails and 2 on a usage error. `filmcraft-cli help` prints the reference.
+The CLI and the headless MCP server refuse a parameter the command does not document (a typo would
+otherwise be ignored and the command run with its defaults): the error names it, suggests `clips`
+for `clip` and lists the accepted keys. The desktop UI and the control channel stay lenient.
 
 ```sh
 filmcraft-cli commands razor                     # find ids (add --json for machine output)

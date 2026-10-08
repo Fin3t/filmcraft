@@ -529,3 +529,39 @@ fn dragging_an_effect_parameter_is_one_undo_step() {
     s.undo();
     assert_eq!(opacity(&s), start, "and then the whole first one");
 }
+
+/// Scripts and agents (CLI, headless MCP) call `execute_checked`: a key the command does not
+/// document is an error naming it and the accepted keys, instead of being ignored
+/// (`timeline.razor {"secnds": 3}` cut at the playhead and reported success).
+#[test]
+fn execute_checked_rejects_unknown_params() {
+    let mut s = demo();
+    let rev = s.revision;
+    let e = s.execute_checked("timeline.razor", json!({"secnds": 3})).unwrap_err().to_string();
+    assert!(e.contains("`secnds`") && e.contains("seconds"), "{e}");
+    assert_eq!(s.revision, rev, "nothing ran");
+    // singular for plural: the documented key is suggested
+    let c = s.active_sequence().unwrap().video_tracks[0].items[0].id.0;
+    let e = s.execute_checked("clip.fillFrame", json!({"clip": [c]})).unwrap_err().to_string();
+    assert!(e.contains("did you mean `clips`"), "{e}");
+    // documented keys, the time variants of a documented time, and doc alternatives pass
+    s.execute_checked("playhead.set", json!({"frame": 3})).unwrap();
+    s.execute_checked("playhead.set", json!({"seconds": 1.0})).unwrap();
+    s.execute_checked("clip.fillFrame", json!({"clips": [c]})).unwrap();
+    s.execute_checked("timeline.razor", json!({"seconds": 1.5})).unwrap();
+    // a command documented as `{}` takes no keys
+    assert!(s.execute_checked("edit.undo", json!({"steps": 2})).unwrap_err().to_string().contains("accepted: none"));
+    // the unchecked path (UI, internal calls) stays lenient
+    s.execute("playhead.set", json!({"seconds": 1.0, "secnds": 2})).unwrap();
+}
+
+/// Every params doc that names keys parses into them, so `execute_checked` knows what each
+/// command accepts (a doc the parser cannot read would reject every key).
+#[test]
+fn every_params_doc_lists_its_keys() {
+    for c in command_specs() {
+        let Some(keys) = commands::accepted_params(c) else { continue };
+        let names_keys = c.params.contains('"') || c.params.trim().starts_with("as ");
+        assert_eq!(keys.is_empty(), !names_keys, "{}: {:?} from {}", c.id, keys, c.params);
+    }
+}

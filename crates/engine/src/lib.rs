@@ -612,6 +612,15 @@ impl Session {
         self.revision != self.saved_revision
     }
 
+    /// Run a command for a script or agent (CLI, MCP): like [`Session::execute`], but a parameter
+    /// the command does not document is an error naming it and the accepted ones, instead of being
+    /// ignored while the command runs with its defaults. The UI and internal calls use `execute`.
+    pub fn execute_checked(&mut self, id: &str, params: Value) -> Result<Value> {
+        let spec = commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        commands::check_params(spec, &params)?;
+        self.execute(id, params)
+    }
+
     /// Run a command by id.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
         let spec = commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
