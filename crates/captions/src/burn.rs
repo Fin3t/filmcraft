@@ -49,13 +49,14 @@ impl Overlay {
     }
 }
 
-/// The caption face: Inter SemiBold at `px`.
-fn caption_style(px: f32) -> TextStyle {
-    TextStyle { style: "SemiBold".into(), size: px, ..Default::default() }
+/// The caption face: the track's font family (Inter by default) in SemiBold, or the nearest weight
+/// the family has, at `px`.
+fn caption_style(font: &str, px: f32) -> TextStyle {
+    TextStyle { family: font.into(), style: "SemiBold".into(), size: px, ..Default::default() }
 }
 
-fn measure(text: &str, px: f32) -> f32 {
-    filmcraft_text::measure(text, &caption_style(px))
+fn measure(text: &str, font: &str, px: f32) -> f32 {
+    filmcraft_text::measure(text, &caption_style(font, px))
 }
 
 fn lin(c: [u8; 4]) -> [f32; 4] {
@@ -64,12 +65,12 @@ fn lin(c: [u8; 4]) -> [f32; 4] {
 }
 
 /// Word-wrap one line to `max_w` pixels.
-fn wrap(line: &str, px: f32, max_w: f32) -> Vec<String> {
+fn wrap(line: &str, font: &str, px: f32, max_w: f32) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     for word in line.split(' ') {
         let cand = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
-        if !cur.is_empty() && measure(&cand, px) > max_w {
+        if !cur.is_empty() && measure(&cand, font, px) > max_w {
             out.push(std::mem::take(&mut cur));
             cur = word.to_string();
         } else {
@@ -118,13 +119,13 @@ pub fn render_caption(c: &Caption, style: &CaptionStyle, w: usize, h: usize) -> 
     let mut lines: Vec<String> = Vec::new();
     // (speaker names are metadata; like Premiere, they are not burned in)
     for l in c.plain_lines() {
-        lines.extend(wrap(l.trim(), px, max_w));
+        lines.extend(wrap(l.trim(), &style.font, px, max_w));
     }
     lines.retain(|l| !l.is_empty());
     if lines.is_empty() {
         return None;
     }
-    let vm = filmcraft_text::fonts::face(filmcraft_text::resolve("Inter", "SemiBold").face).metrics(px);
+    let vm = filmcraft_text::fonts::face(filmcraft_text::resolve(&style.font, "SemiBold").face).metrics(px);
     let (asc, desc) = (vm.ascent, vm.descent);
     let lh = px * style.line_spacing.max(0.8);
     let pad_x = (px * 0.3).round();
@@ -141,7 +142,7 @@ pub fn render_caption(c: &Caption, style: &CaptionStyle, w: usize, h: usize) -> 
     .max(0.0)
     .round();
     let side = w as f32 * 0.05;
-    let widths: Vec<f32> = lines.iter().map(|l| measure(l, px)).collect();
+    let widths: Vec<f32> = lines.iter().map(|l| measure(l, &style.font, px)).collect();
     let xs: Vec<f32> = widths
         .iter()
         .map(|&lw| match align {
@@ -176,7 +177,7 @@ pub fn render_caption(c: &Caption, style: &CaptionStyle, w: usize, h: usize) -> 
             }
         }
         let baseline = lt + (lh - (asc + desc)) / 2.0 + asc;
-        let l = layout(line, &caption_style(px), &ParagraphStyle::default());
+        let l = layout(line, &caption_style(&style.font, px), &ParagraphStyle::default());
         let mut m = filmcraft_text::Mask { w: ow, h: oh, a: std::mem::take(&mut cover) };
         render::draw(&l, &render::at(xs[i], baseline.round()), &mut m, (ox, oy));
         cover = m.a;
@@ -303,6 +304,19 @@ mod tests {
         let st = CaptionStyle { background: false, outline: 4.0, outline_color: [255, 0, 0, 255], ..Default::default() };
         let o = render_caption(&cap("O"), &st, 1920, 1080).unwrap();
         assert!(o.px.chunks(4).any(|p| p[0] > 0.9 && p[1] < 0.05 && p[3] > 0.9), "red outline pixels");
+    }
+
+    /// T2 phase 2: `captions.setStyle {"font": …}` was stored but the burn-in always drew Inter.
+    /// The track's font family is used (its SemiBold, or the nearest weight it has).
+    #[test]
+    fn the_track_font_is_used() {
+        let c = cap("Containment alert");
+        let inter = render_caption(&c, &CaptionStyle::default(), 1920, 1080).unwrap();
+        let mono = render_caption(&c, &CaptionStyle { font: "JetBrains Mono".into(), ..Default::default() }, 1920, 1080).unwrap();
+        assert!(mono.w > inter.w + 20, "a monospaced face sets wider: {} vs {}", mono.w, inter.w);
+        // an unknown family falls back to Inter
+        let missing = render_caption(&c, &CaptionStyle { font: "No Such Font".into(), ..Default::default() }, 1920, 1080).unwrap();
+        assert_eq!((missing.w, missing.px.len()), (inter.w, inter.px.len()));
     }
 
     #[test]
