@@ -315,21 +315,29 @@ impl FilmcraftMcp {
 
     #[tool(
         title = "Run several commands",
-        description = "Run several commands in order: {steps: [{id, params?}], stop_on_error?: true}. Returns {completed, failed, results: [{ok, result | error}]}; each edit is its own undo step.",
+        description = "Run several commands in order: {steps: [{id, params?}], stop_on_error?: true}. Returns {completed, failed, results: [{ok, result | error}]}; each edit is its own undo step. A string param \"$N\" or \"$N.key.0\" is step N's result (1-based), e.g. {\"clip\": \"$1.clip\"}.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
     )]
     async fn command_batch(&self, Parameters(p): Parameters<BatchParams>) -> Result<CallToolResult, McpError> {
         let stop = p.stop_on_error.unwrap_or(true);
         let (mut completed, mut failed, mut results) = (0u32, 0u32, Vec::new());
+        // what each step returned, for `$N` references (a failed step returned null)
+        let mut values: Vec<Value> = Vec::new();
         for st in p.steps {
-            match self.run(&st.id, st.params.unwrap_or(json!({}))).await {
+            let r = match crate::refs::substitute(&st.params.unwrap_or(json!({})), &values) {
+                Ok(params) => self.run(&st.id, params).await.map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            };
+            match r {
                 Ok(v) => {
                     completed += 1;
+                    values.push(v.clone());
                     results.push(json!({"ok": true, "result": v}));
                 }
                 Err(e) => {
                     failed += 1;
-                    results.push(json!({"ok": false, "error": e.to_string()}));
+                    values.push(Value::Null);
+                    results.push(json!({"ok": false, "error": e}));
                     if stop {
                         break;
                     }
@@ -797,6 +805,27 @@ mod tests {
         assert!(v["project"].is_object() && v["sequence"].is_object(), "{v}");
         let r = c.call(9, "render_preview", json!({"max_side": 64})).await;
         assert_eq!(r["result"]["content"][0]["type"], "image", "{r}");
+    }
+
+    /// `command_batch` steps use earlier results: `"$1.clip"` is step 1's `clip`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn batch_refers_to_earlier_results() {
+        let mut c = Client::start(demo());
+        c.init().await;
+        let steps = json!({"steps": [
+            {"id": "graphics.newText", "params": {"text": "A", "seconds": 1, "track": 3, "time": 0}},
+            {"id": "graphics.set", "params": {"clip": "$1.clip", "props": {"opacity": 40}}},
+            {"id": "timeline.select", "params": {"clips": ["$1.clip"]}},
+        ]});
+        let r = c.call(1, "command_batch", steps).await;
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let clip = v["results"][0]["result"]["clip"].clone();
+        assert!(clip.is_u64(), "{v}");
+        assert_eq!(v["results"][2]["result"]["selection"], json!([clip]), "{v}");
+        let r = c.call(2, "command_batch", json!({"steps": [{"id": "timeline.select", "params": {"clips": ["$2.clip"]}}]})).await;
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("step 2"), "{r}");
     }
 
     /// `filmcraft://document` and `filmcraft://commands` are listed and readable as JSON.

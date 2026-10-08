@@ -56,7 +56,7 @@ claude mcp add filmcraft -- filmcraft-cli mcp
 |---|---|---|
 | `command_list` | both | every command: id, label, menu, shortcut, params, enabled now (`filter`, `enabled_only`) |
 | `command_run` | both | run a command `{id, params}`; edits are undoable |
-| `command_batch` | both | run several commands in order `{steps: [{id, params}], stop_on_error}` → `{completed, failed, results}` |
+| `command_batch` | both | run several commands in order `{steps: [{id, params}], stop_on_error}` → `{completed, failed, results}`; `"$N.key"` in a param is step N's result (`{"clip": "$1.clip"}`), `"$$…"` a literal `$` |
 | `doc_inspect` | both | the project tree and the active sequence in one call (`project_inspect` + `sequence_inspect`) |
 | `render_preview` | both | same as `render_frame` |
 | `project_inspect` | both | bins and items with ids, types, durations; active sequence |
@@ -177,7 +177,9 @@ Notes:
   clip moves its sound by the same offset (pass `"linked": false` to move only the listed clips).
   It returns `{"moved": [ids]}`, every clip that moved.
 - Without a window, `filmcraft-cli run script.jsonl` (lines of `{"id":"…","params":{…}}`) runs the
-  same commands headlessly. See §2b for the rest of the CLI.
+  same commands headlessly. A later line uses an earlier result with `"$N.key"` (N counts the
+  commands from 1, not comments): `{"id":"graphics.set","params":{"clip":"$1.clip",…}}` after a
+  `graphics.newText` line. See §2b for the rest of the CLI.
 
 ## 2b. Command-line interface
 

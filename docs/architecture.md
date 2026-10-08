@@ -697,7 +697,7 @@ All of these dispatch the same command ids.
 | Surface | Where | Scope |
 |---|---|---|
 | UI | `ui-egui` menus, shortcuts, panels | `menus::invoke` → engine or UI command |
-| CLI | `filmcraft-cli` | `exec <id> key=value…`, `run script.jsonl` (one `{"id","params"}` per line), `inspect`, `import`, `export`, `render`, `probe`; `--save`, `--bridge` |
+| CLI | `filmcraft-cli` | `exec <id> key=value…`, `run script.jsonl` (one `{"id","params"}` per line; `"$N.key"` is step N's result), `inspect`, `import`, `export`, `render`, `probe`; `--save`, `--bridge` |
 | Control channel | `filmcraft --control <port>` | JSON lines on loopback TCP: engine commands plus synthetic input, inspection and screenshots of the live UI |
 | MCP | `filmcraft-cli mcp` | stdio MCP server: headless in-process session, or `--bridge` to the control channel |
 
