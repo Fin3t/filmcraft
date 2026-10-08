@@ -98,6 +98,17 @@ fn exec_save_as_then_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A mistyped parameter is an error (exit 1) that names it and the accepted keys, not a silent
+/// default: `timeline.razor secnds=3` cut at the playhead and printed {"cuts":0}.
+#[test]
+fn exec_rejects_unknown_parameters() {
+    let o = cli(&["--demo", "exec", "timeline.razor", "secnds=3"]);
+    assert_eq!(o.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("`secnds`") && err.contains("seconds"), "{err}");
+    json_out(&cli(&["--demo", "exec", "timeline.razor", "seconds=3"]));
+}
+
 #[test]
 fn run_keep_going_reports_failures() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_filmcraft-cli"))

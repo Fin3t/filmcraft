@@ -144,6 +144,105 @@ pub(crate) fn named_items(s: &Session, spec: &CommandSpec, p: &Value) -> Option<
     (!items.is_empty()).then_some(items)
 }
 
+// ---------- accepted parameters (scripts and agents) ----------
+
+/// The top-level keys a params doc accepts: every quoted name directly followed by `:` in the
+/// doc's `{…}` (or in each alternative, `{"transition":id} or {"transitions":[id]}`), with `|`
+/// splitting alternatives inside a name (`"startTime|startFrame":…`) or between pairs
+/// (`"time":ticks|"frame":i64`); nested objects (`"props":{…}`) are values. A documented time
+/// brings its siblings (`time` → `frame`, `seconds`, `timecode`; `startTime` → `startSeconds`…),
+/// which [`time_p`] reads alike. `as <id>` borrows that command's doc and `…settings params` the
+/// export settings of `file.exportMedia`. `None` for a free-form doc
+/// (no check).
+pub(crate) fn accepted_params(spec: &CommandSpec) -> Option<Vec<String>> {
+    let doc = spec.params.trim();
+    if let Some(other) = doc.strip_prefix("as ") {
+        return find(other.trim()).filter(|o| o.id != spec.id && !o.params.trim().starts_with("as ")).and_then(accepted_params);
+    }
+    if !doc.starts_with('{') || doc.contains("flat overrides") {
+        return None;
+    }
+    let mut keys: Vec<String> = Vec::new();
+    let (mut depth, mut in_str, mut cur, mut last) = (0i32, false, String::new(), None::<String>);
+    for c in doc.chars() {
+        if in_str {
+            if c == '"' {
+                in_str = false;
+                last = Some(std::mem::take(&mut cur));
+            } else {
+                cur.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' | '[' | '(' => {
+                depth += 1;
+                last = None;
+            }
+            '}' | ']' | ')' => {
+                depth -= 1;
+                last = None;
+            }
+            ':' if depth == 1 => {
+                for k in last.take().unwrap_or_default().split('|') {
+                    if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !keys.iter().any(|x| x == k) {
+                        keys.push(k.to_string());
+                    }
+                }
+            }
+            c if c.is_whitespace() => {}
+            _ => last = None,
+        }
+    }
+    // `…settings params`: the export settings, as file.exportMedia documents them
+    if doc.contains("settings params")
+        && let Some(settings) = find("file.exportMedia").filter(|e| e.id != spec.id).and_then(accepted_params)
+    {
+        for k in settings {
+            if !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
+    }
+    const TIMES: [&str; 4] = ["Time", "Frame", "Seconds", "Timecode"];
+    let mut more = Vec::new();
+    for k in &keys {
+        let prefix = TIMES.iter().find_map(|t| if k.eq_ignore_ascii_case(t) { Some("") } else { k.strip_suffix(t) });
+        if let Some(prefix) = prefix {
+            for t in TIMES {
+                more.push(if prefix.is_empty() { t.to_ascii_lowercase() } else { format!("{prefix}{t}") });
+            }
+        }
+    }
+    for k in more {
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
+    }
+    Some(keys)
+}
+
+/// Refuse parameters a command does not document (typos, guessed names): they would be ignored
+/// and the command would run with its defaults. The error names them, suggests the documented
+/// singular or plural (`clip` for `clips`), and lists the accepted keys.
+pub(crate) fn check_params(spec: &CommandSpec, p: &Value) -> Result<()> {
+    let (Some(obj), Some(accepted)) = (p.as_object(), accepted_params(spec)) else { return Ok(()) };
+    let unknown: Vec<String> = obj
+        .keys()
+        .filter(|k| !accepted.contains(k))
+        .map(|k| {
+            let other = k.strip_suffix('s').map(str::to_string).unwrap_or_else(|| format!("{k}s"));
+            if accepted.contains(&other) { format!("`{k}` (did you mean `{other}`?)") } else { format!("`{k}`") }
+        })
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let list = if accepted.is_empty() { "none".to_string() } else { accepted.join(", ") };
+    Err(bad(spec.id, format!("unknown parameter {}; accepted: {list} (params: {})", unknown.join(", "), spec.params)))
+}
+
 // ---------- param helpers ----------
 
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {

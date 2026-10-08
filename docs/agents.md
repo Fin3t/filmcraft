@@ -188,6 +188,9 @@ success, 1 when a command fails and 2 on a usage error. `filmcraft-cli help` pri
 If the reader of stdout closes the pipe early (`filmcraft-cli commands | head`), the CLI drops the rest
 of its output but still finishes the work, saves included, and the exit status still reports
 failures; any other stdout write error is reported and makes the status 1.
+The CLI and the headless MCP server refuse a parameter the command does not document (a typo would
+otherwise be ignored and the command run with its defaults): the error names it, suggests `clips`
+for `clip` and lists the accepted keys. The desktop UI and the control channel stay lenient.
 
 ```sh
 filmcraft-cli commands razor                     # find ids (add --json for machine output)
