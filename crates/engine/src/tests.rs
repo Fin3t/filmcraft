@@ -789,3 +789,31 @@ fn audio_transition_edge_overrides_the_playhead() {
         assert!(e.contains("edge"), "{id}: {e}");
     }
 }
+
+/// T2: a misplaced transition could not be removed by command (`edit.clear` takes clips, and
+/// nothing named a transition). `sequence.removeTransition` removes transitions by id, as one
+/// undo step, and refuses unknown ids and locked tracks with a reason.
+#[test]
+fn remove_transition_by_id() {
+    let mut s = demo();
+    let ids = |s: &Session| -> Vec<u64> { s.active_sequence().unwrap().all_tracks().flat_map(|t| t.transitions.iter().map(|x| x.id.0)).collect() };
+    let before = ids(&s);
+    let (v, a) = (s.active_sequence().unwrap().video_tracks[0].transitions[0].id.0, s.active_sequence().unwrap().audio_tracks[0].transitions[0].id.0);
+    let r = s.execute("sequence.removeTransition", json!({"transition": v})).unwrap();
+    assert_eq!(r["removed"], json!([v]));
+    assert!(!ids(&s).contains(&v) && ids(&s).len() == before.len() - 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(ids(&s), before, "one undo step");
+    s.execute("sequence.removeTransition", json!({"transitions": [v, a]})).unwrap();
+    assert!(!ids(&s).contains(&v) && !ids(&s).contains(&a));
+    s.execute("edit.undo", json!({})).unwrap();
+    // unknown ids, no ids: errors that say why, nothing removed
+    let e = s.execute("sequence.removeTransition", json!({"transitions": [v, 987_654]})).unwrap_err().to_string();
+    assert!(e.contains("987654"), "{e}");
+    assert!(s.execute("sequence.removeTransition", json!({})).is_err());
+    assert_eq!(ids(&s), before);
+    // a locked track keeps its transition
+    s.execute("timeline.setTrack", json!({"track": "V1", "locked": true})).unwrap();
+    assert!(s.execute("sequence.removeTransition", json!({"transition": v})).is_err());
+    assert_eq!(ids(&s), before);
+}
