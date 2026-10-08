@@ -124,8 +124,8 @@ fn naming_nothing_usable_does_not_enable_a_command() {
         assert_eq!(disabled(s.execute("edit.rippleDelete", p.clone())), "nothing selected", "{p}");
     }
     assert_eq!(disabled(s.execute("clip.replaceFromBin", json!({"clips": [v1(&s)[0].id.0], "item": 987_654_321u64}))), "select a clip in the Project panel");
-    // `edit.cut` takes no `clips`: it works on the selection only
-    assert_eq!(disabled(s.execute("edit.cut", json!({"clips": [v1(&s)[0].id.0]}))), "no clips selected");
+    // `timeline.nudgeLeft` (a keyboard nudge) takes no `clips`: it works on the selection only
+    assert_eq!(disabled(s.execute("timeline.nudgeLeft", json!({"clips": [v1(&s)[0].id.0]}))), "no clips selected");
     assert!(std::sync::Arc::ptr_eq(&before, &s.project), "nothing was edited");
 }
 
@@ -210,4 +210,43 @@ fn project_delete_takes_explicit_bins_and_items_without_a_selection() {
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.project.items.len(), before);
+}
+
+/// Commands that only knew the selection take `clips` too, so a script or agent can group, nest,
+/// copy, cut, mark and scale named clips without selecting them first.
+#[test]
+fn selection_only_commands_take_explicit_clips() {
+    let mut s = demo();
+    let (a, b) = (v1(&s)[0].clone(), v1(&s)[1].clone());
+    for id in ["clip.group", "clip.ungroup", "clip.scaleToFrameSize", "markers.markSelection", "edit.copy", "edit.cut", "clip.nest"] {
+        assert!(crate::commands::find(id).unwrap().params.contains(r#""clips":[id]"#), "{id} documents `clips`");
+    }
+    // Group / Ungroup
+    s.execute("clip.group", json!({"clips": [a.id.0, b.id.0]})).unwrap();
+    let g = clip(&s, a.id).unwrap().group;
+    assert!(g.is_some() && clip(&s, b.id).unwrap().group == g);
+    s.execute("clip.ungroup", json!({"clips": [a.id.0, b.id.0]})).unwrap();
+    assert!(clip(&s, a.id).unwrap().group.is_none() && clip(&s, b.id).unwrap().group.is_none());
+    // Scale to Frame Size toggles the named clip only
+    s.execute("clip.scaleToFrameSize", json!({"clips": [a.id.0]})).unwrap();
+    assert_ne!(clip(&s, a.id).unwrap().scale_to_frame, a.scale_to_frame);
+    assert_eq!(clip(&s, b.id).unwrap().scale_to_frame, b.scale_to_frame);
+    // Mark Selection marks the named clip's span
+    s.execute("markers.markSelection", json!({"clips": [b.id.0]})).unwrap();
+    let fd = s.sequence_rate().frame_duration();
+    let q = s.active_sequence().unwrap();
+    assert_eq!((q.mark_in, q.mark_out), (Some(b.start), Some(b.end() - fd)));
+    // Copy a clip, paste its attributes onto another: no selection at any point
+    s.execute("edit.copy", json!({"clips": [a.id.0]})).unwrap();
+    assert!(!s.state.clipboard.is_empty());
+    s.execute("edit.pasteAttributes", json!({"clips": [b.id.0]})).unwrap();
+    // Cut removes the named clip
+    s.execute("edit.cut", json!({"clips": [b.id.0]})).unwrap();
+    assert!(clip(&s, b.id).is_none());
+    // Nest moves the named clip into a new sequence
+    let seqs = s.project.items.values().filter(|i| s.project.sequence(i.id).is_some()).count();
+    s.execute("clip.nest", json!({"clips": [a.id.0], "name": "Nested A"})).unwrap();
+    assert!(clip(&s, a.id).is_none());
+    assert_eq!(s.project.items.values().filter(|i| s.project.sequence(i.id).is_some()).count(), seqs + 1);
+    assert!(s.state.selection.iter().all(|c| clip(&s, *c).is_some()), "the selection holds no stale clips");
 }

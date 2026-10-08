@@ -1169,9 +1169,10 @@ fn build() -> Vec<CommandSpec> {
         // ================= Edit =================
         cmd!("edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{}", can_undo, |s, _| Ok(json!({"undone": s.undo()}))),
         cmd!("edit.redo", "Redo", ["Edit"], Some("Cmd+Shift+Z"), "{}", can_redo, |s, _| Ok(json!({"redone": s.redo()}))),
-        cmd!("edit.cut", "Cut", ["Edit"], Some("Cmd+X"), "{}", has_selection, |s, _| {
-            copy_selection(s);
-            let sel = with_links(s, &s.state.selection.clone());
+        cmd!("edit.cut", "Cut", ["Edit"], Some("Cmd+X"), r#"{"clips":[id]?}"#, has_selection, |s, p| {
+            let clips = clips_p(s, p);
+            copy_clips(s, &clips);
+            let sel = with_links(s, &clips);
             s.edit_sequence("Cut", |q, _, st| {
                 edit::delete_items(q, &sel);
                 st.selection.clear();
@@ -1179,8 +1180,8 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("edit.copy", "Copy", ["Edit"], Some("Cmd+C"), "{}", has_selection, |s, _| {
-            copy_selection(s);
+        cmd!("edit.copy", "Copy", ["Edit"], Some("Cmd+C"), r#"{"clips":[id]?}"#, has_selection, |s, p| {
+            copy_clips(s, &clips_p(s, p));
             Ok(json!({"copied": s.state.clipboard.len()}))
         }),
         cmd!("edit.paste", "Paste", ["Edit"], Some("Cmd+V"), "{}", has_clipboard, |s, _| paste(s, false)),
@@ -1356,8 +1357,8 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"linked": !linked}))
         }),
-        cmd!("clip.group", "Group", ["Clip"], Some("Cmd+G"), "{}", has_selection, |s, _| {
-            let sel = s.state.selection.clone();
+        cmd!("clip.group", "Group", ["Clip"], Some("Cmd+G"), r#"{"clips":[id]?}"#, has_selection, |s, p| {
+            let sel = clips_p(s, p);
             s.edit_sequence("Group", |q, ctx, _| {
                 let g = ctx.alloc();
                 for c in &sel {
@@ -1369,8 +1370,8 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("clip.ungroup", "Ungroup", ["Clip"], Some("Cmd+Shift+G"), "{}", has_selection, |s, _| {
-            let sel = s.state.selection.clone();
+        cmd!("clip.ungroup", "Ungroup", ["Clip"], Some("Cmd+Shift+G"), r#"{"clips":[id]?}"#, has_selection, |s, p| {
+            let sel = clips_p(s, p);
             s.edit_sequence("Ungroup", |q, _, _| {
                 for c in &sel {
                     if let Some((_, i)) = q.find_item_mut(*c) {
@@ -1381,8 +1382,8 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("clip.scaleToFrameSize", "Scale to Frame Size", ["Clip", "Video Options"], None, "{}", has_selection, |s, _| {
-            let sel = s.state.selection.clone();
+        cmd!("clip.scaleToFrameSize", "Scale to Frame Size", ["Clip", "Video Options"], None, r#"{"clips":[id]?}"#, has_selection, |s, p| {
+            let sel = clips_p(s, p);
             s.edit_sequence("Scale to Frame Size", |q, _, _| {
                 for c in &sel {
                     if let Some((_, i)) = q.find_item_mut(*c) {
@@ -1406,7 +1407,7 @@ fn build() -> Vec<CommandSpec> {
         cmd!("clip.frameHold", "Add Frame Hold", ["Clip", "Video Options"], None, r#"{"clips":[id]?,"time":ticks?}"#, has_seq, |s, p| {
             crate::clip_ops::add_frame_hold(s, p)
         }),
-        cmd!("clip.nest", "Nest…", ["Clip"], None, r#"{"name":str}"#, has_selection, |s, p| nest(s, p)),
+        cmd!("clip.nest", "Nest…", ["Clip"], None, r#"{"clips":[id]?,"name":str}"#, has_selection, |s, p| nest(s, p)),
         // Reveal in Project (clip context menu) and Reveal Sequence in Project (Timeline tab menu):
         // select the item in the Project panel and show it there
         cmd!("clip.revealInProject", "Reveal in Project", [], None, r#"{"clip":id?}"#, has_seq, |s, p| {
@@ -1711,9 +1712,9 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("markers.markSelection", "Mark Selection", ["Markers"], Some("/"), "{}", has_selection, |s, _| {
+        cmd!("markers.markSelection", "Mark Selection", ["Markers"], Some("/"), r#"{"clips":[id]?}"#, has_selection, |s, p| {
+            let sel = clips_p(s, p);
             let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
-            let sel = s.state.selection.clone();
             let items: Vec<_> = sel.iter().filter_map(|c| seq.find_item(*c).map(|(_, i)| i.range())).collect();
             let a = items.iter().map(|r| r.start).min().unwrap_or_default();
             let b = items.iter().map(|r| r.end()).max().unwrap_or_default();
@@ -2868,9 +2869,9 @@ pub(crate) fn json_to_param(template: &ParamValue, v: &Value) -> Option<ParamVal
     })
 }
 
-fn copy_selection(s: &mut Session) {
+fn copy_clips(s: &mut Session, clips: &[ClipId]) {
     let Some(q) = s.active_sequence() else { return };
-    let sel = with_links(s, &s.state.selection);
+    let sel = with_links(s, clips);
     let min = sel.iter().filter_map(|c| q.find_item(*c).map(|(_, i)| i.start)).min().unwrap_or_default();
     let max = sel.iter().filter_map(|c| q.find_item(*c).map(|(_, i)| i.end())).max().unwrap_or_default();
     // Copy Paste Includes Sequence Markers: the markers inside the copied span go along
@@ -2945,7 +2946,7 @@ pub fn next_nested_name(s: &Session) -> String {
 
 fn nest(s: &mut Session, p: &Value) -> Result<Value> {
     let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
-    let sel = with_links(s, &s.state.selection.clone());
+    let sel = with_links(s, &clips_p(s, p));
     let q = s.active_sequence().ok_or(EngineError::NoSequence)?.clone();
     let name = str_p(p, "name").filter(|n| !n.trim().is_empty()).map(str::to_string).unwrap_or_else(|| next_nested_name(s));
     let mut items: Vec<(TrackKind, usize, filmcraft_project::TrackItem)> = Vec::new();
