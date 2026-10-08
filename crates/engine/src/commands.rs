@@ -1457,6 +1457,15 @@ fn build() -> Vec<CommandSpec> {
             has_seq,
             set_transition
         ),
+        cmd!(
+            "sequence.removeTransition",
+            "Remove Transition",
+            [],
+            None,
+            r#"{"transition":id} or {"transitions":[id]} (ids from sequence.inspect or the apply result)"#,
+            has_seq,
+            remove_transitions
+        ),
         cmd!("sequence.closeGap", "Close Gap", ["Sequence"], None, r#"{"track":"V1"|id,"time":ticks}"#, has_seq, |s, p| {
             let tr = track_p(s, p, "track", "sequence.closeGap")?.ok_or_else(|| bad("sequence.closeGap", "need `track`"))?;
             let t = time_p(s, p, "").unwrap_or(s.playhead());
@@ -3013,6 +3022,33 @@ fn set_transition(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"transition": id, "effect": cur.effect.effect, "reverse": cur.reverse}))
+}
+
+/// `sequence.removeTransition`: remove applied transitions by id, as one undo step. Every id must
+/// name a transition of the active sequence on an unlocked track, or nothing is removed.
+fn remove_transitions(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "sequence.removeTransition";
+    let ids: Vec<u64> = match p.get("transitions").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_u64).collect(),
+        None => u64_p(p, "transition").into_iter().collect(),
+    };
+    if ids.is_empty() {
+        return Err(bad(CMD, "need `transition` (an id) or `transitions` ([id])"));
+    }
+    let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
+    for id in &ids {
+        let t = q.all_tracks().find(|t| t.transitions.iter().any(|x| x.id.0 == *id)).ok_or_else(|| bad(CMD, format!("no transition {id}")))?;
+        if t.locked {
+            return Err(bad(CMD, format!("transition {id} is on locked track {}", t.name)));
+        }
+    }
+    s.edit_sequence("Remove Transition", |q, _, _| {
+        for t in q.video_tracks.iter_mut().chain(q.audio_tracks.iter_mut()) {
+            t.transitions.retain(|x| !ids.contains(&x.id.0));
+        }
+        Ok(())
+    })?;
+    Ok(json!({"removed": ids}))
 }
 
 fn apply_transition(s: &mut Session, p: &Value, kind: TrackKind) -> Result<Value> {
