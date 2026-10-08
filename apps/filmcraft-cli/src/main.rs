@@ -168,6 +168,11 @@ async fn main() {
     }
     register_hardware_decoders();
     let a = Args::parse(std::env::args().skip(1));
+    // `--help` is parsed as a flag, so it can stand anywhere (`filmcraft-cli exec --help`)
+    if a.flag("--help") {
+        print!("{HELP}");
+        return;
+    }
     let Some(cmd) = a.pos(0) else { usage("missing subcommand") };
     match cmd {
         "help" | "--help" | "-h" => print!("{HELP}"),
