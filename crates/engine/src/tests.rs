@@ -529,3 +529,28 @@ fn dragging_an_effect_parameter_is_one_undo_step() {
     s.undo();
     assert_eq!(opacity(&s), start, "and then the whole first one");
 }
+
+/// T2: a fade on the music's out point landed on its in point, because Apply Audio Transition
+/// did not document `edge` and the playhead (near the start) picked the edge. `edge` places it,
+/// for audio as for video, wherever the playhead is; an unknown edge is an error, not a guess.
+#[test]
+fn audio_transition_edge_overrides_the_playhead() {
+    let mut s = demo();
+    assert!(commands::find("sequence.applyAudioTransition").unwrap().params.contains(r#""edge":"in"|"out"?"#), "edge is documented");
+    let music = s.active_sequence().unwrap().audio_tracks[1].items[0].clone();
+    let rate = s.sequence_rate();
+    s.execute("playhead.set", json!({"time": (music.start + rate.tick_of(5)).0})).unwrap();
+    let r = s.execute("sequence.applyAudioTransition", json!({"clip": music.id.0, "edge": "out", "frames": 10})).unwrap();
+    let find = |s: &Session, id: u64| s.active_sequence().unwrap().audio_tracks[1].transitions.iter().find(|t| t.id.0 == id).cloned().unwrap();
+    let out = find(&s, r["transition"].as_u64().unwrap());
+    assert_eq!((out.from, out.to, out.start + out.duration), (Some(music.id), None, music.end()), "a fade-out at the clip's end");
+    s.execute("playhead.set", json!({"time": (music.end() - rate.tick_of(5)).0})).unwrap();
+    let r = s.execute("sequence.applyAudioTransition", json!({"clip": music.id.0, "edge": "in", "frames": 10})).unwrap();
+    let fade_in = find(&s, r["transition"].as_u64().unwrap());
+    assert_eq!((fade_in.from, fade_in.to, fade_in.start), (None, Some(music.id), music.start), "a fade-in at the clip's start");
+    for id in ["sequence.applyAudioTransition", "sequence.applyVideoTransition"] {
+        let clip = if id.contains("Audio") { music.id.0 } else { s.active_sequence().unwrap().video_tracks[0].items[0].id.0 };
+        let e = s.execute(id, json!({"clip": clip, "edge": "end"})).unwrap_err().to_string();
+        assert!(e.contains("edge"), "{id}: {e}");
+    }
+}
