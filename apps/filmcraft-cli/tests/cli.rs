@@ -110,6 +110,46 @@ fn run_keep_going_reports_failures() {
     assert_eq!(lines[1]["ok"], true);
 }
 
+/// A `run` script uses what earlier lines returned: `"$N.key"` is step N's `key` (N counts the
+/// commands, not comments or blank lines), as in EffectCraft's batches. No `jq` between steps.
+#[test]
+fn run_refers_to_earlier_results() {
+    let run = |script: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_filmcraft-cli"))
+            .args(["--demo", "--keep-going", "run", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        let lines: Vec<Value> = String::from_utf8_lossy(&out.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        (out.status.code(), lines)
+    };
+    let (code, lines) = run(concat!(
+        "# a title, styled and selected by the id step 1 returned\n",
+        "{\"id\":\"graphics.newText\",\"params\":{\"text\":\"A\",\"seconds\":1,\"track\":3,\"time\":0}}\n",
+        "\n",
+        "{\"id\":\"graphics.set\",\"params\":{\"clip\":\"$1.clip\",\"props\":{\"opacity\":40}}}\n",
+        "{\"id\":\"timeline.select\",\"params\":{\"clips\":[\"$1.clip\"]}}\n",
+    ));
+    assert_eq!(code, Some(0), "{lines:?}");
+    let clip = lines[0]["result"]["clip"].clone();
+    assert!(clip.is_u64(), "{lines:?}");
+    assert_eq!(lines.iter().map(|l| l["step"].clone()).collect::<Vec<_>>(), [1, 2, 3]);
+    assert_eq!(lines[2]["result"]["selection"], serde_json::json!([clip]));
+    // a reference to a step that has not run, or to a key the result lacks, fails that line
+    let (code, lines) = run(concat!(
+        "{\"id\":\"file.newBin\",\"params\":{\"name\":\"x\"}}\n",
+        "{\"id\":\"timeline.select\",\"params\":{\"clips\":[\"$5.clip\"]}}\n",
+        "{\"id\":\"timeline.select\",\"params\":{\"clips\":[\"$1.nope\"]}}\n",
+    ));
+    assert_eq!(code, Some(1));
+    assert_eq!((lines[1]["ok"].clone(), lines[2]["ok"].clone()), (Value::Bool(false), Value::Bool(false)));
+    assert!(lines[1]["error"].as_str().unwrap().contains("step 5"), "{lines:?}");
+    assert!(lines[2]["error"].as_str().unwrap().contains("nope"), "{lines:?}");
+}
+
 #[test]
 fn export_wav_waits_for_job() {
     let dir = std::env::temp_dir().join(format!("fc-cli-x-{}", std::process::id()));

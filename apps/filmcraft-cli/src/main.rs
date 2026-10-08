@@ -21,7 +21,9 @@ USAGE
 SUBCOMMANDS
   exec <id> [key=value ...]     run one command; prints its result as JSON
   exec <id> '<json params>'     same, params as one JSON object
-  run <script.jsonl | ->        run commands, one {\"id\",\"params\"} per line (# comments ok)
+  run <script.jsonl | ->        run commands, one {\"id\",\"params\"} per line (# comments ok); a
+                                string param \"$N\" or \"$N.key.0\" is step N's result (N counts the
+                                commands from 1), e.g. {\"clip\":\"$1.clip\"}; \"$$5\" is the text \"$5\"
   commands [filter] [--json]    list commands (id, label, shortcut, params)
   describe <id>                 one command as JSON (menu, shortcut, params, enabled now)
   inspect [project|sequence]    project tree or active sequence as JSON (default: both)
@@ -242,13 +244,24 @@ async fn main() {
             };
             let mut b = Backend::open(&a);
             let mut failed = 0;
+            // what each step returned, for `$N` references (a failed step returned null)
+            let mut results: Vec<Value> = Vec::new();
             for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
                 let v: Value = serde_json::from_str(line).unwrap_or_else(|e| usage(format!("line {}: {e}", n + 1)));
                 let id = v["id"].as_str().unwrap_or_else(|| usage(format!("line {}: missing \"id\"", n + 1)));
-                match b.exec(id, v.get("params").cloned().unwrap_or(json!({}))).await {
-                    Ok(r) => println!("{}", json!({"line": n + 1, "id": id, "ok": true, "result": r})),
+                let step = results.len() + 1;
+                let r = match filmcraft_automation::refs::substitute(v.get("params").unwrap_or(&json!({})), &results) {
+                    Ok(params) => b.exec(id, params).await,
+                    Err(e) => Err(e),
+                };
+                match r {
+                    Ok(r) => {
+                        println!("{}", json!({"line": n + 1, "step": step, "id": id, "ok": true, "result": r}));
+                        results.push(r);
+                    }
                     Err(e) => {
-                        println!("{}", json!({"line": n + 1, "id": id, "ok": false, "error": e}));
+                        println!("{}", json!({"line": n + 1, "step": step, "id": id, "ok": false, "error": e}));
+                        results.push(Value::Null);
                         failed += 1;
                         if !a.flag("--keep-going") {
                             std::process::exit(1);
